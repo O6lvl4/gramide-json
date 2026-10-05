@@ -1,0 +1,14 @@
+{
+  "good": {
+    "package.json": [
+      "\"name\"",
+      "\"scripts\"",
+      "\"nested\""
+    ],
+    "scalar.json": []
+  },
+  "bad": [
+    "trailing-comma.json",
+    "broken-number.json"
+  ]
+}

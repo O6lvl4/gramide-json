@@ -1,0 +1,108 @@
+// Original RFC 8259 scanner. Offsets and columns count UTF-8 bytes.
+import gramide.lex
+import gramide.tree
+
+fn at(src: Bytes, i: Int) -> Int = bytes.get_or(src, i, -1)
+fn digit(b: Int) -> Bool = b >= 48 and b <= 57
+fn hex(b: Int) -> Bool = digit(b) or (b >= 65 and b <= 70) or (b >= 97 and b <= 102)
+fn token(kind: Int, s: Int, e: Int, line: Int, base: Int) -> tree.Token = tree.Token { kind: kind, start: s, end: e, line: line, col: s - base + 1 }
+
+fn scan(source: String, recovering: Bool) -> Result[List[tree.Token], lex.LexError] = {
+  let src = bytes.from_string(source)
+  let n = bytes.len(src)
+  var out: List[tree.Token] = []
+  var i = 0
+  var line = 1
+  var base = 0
+  while i < n {
+    let b = at(src, i)
+    // The shared tree/symbol contract counts LF lines. CR is legal JSON
+    // whitespace, but a lone CR must not invent a line beyond total_lines.
+    if b == 32 or b == 9 or b == 13 then i = i + 1
+    else if b == 10 then {
+      i = i + 1
+      line = line + 1
+      base = i
+    } else {
+      let start = i
+      let start_line = line
+      let start_base = base
+      var kind = tree.T_PUNCT
+      var message = ""
+      if b == 34 then {
+        kind = tree.T_STRING
+        i = i + 1
+        var closed = false
+        while i < n and not closed and message == "" {
+          let ch = at(src, i)
+          if ch == 34 then { i = i + 1; closed = true }
+          else if ch < 32 then message = "unescaped control character in JSON string"
+          else if ch == 92 then {
+            i = i + 1
+            if list.contains([34, 92, 47, 98, 102, 110, 114, 116], at(src, i)) then i = i + 1
+            else if at(src, i) == 117 then {
+              i = i + 1
+              var k = 0
+              while k < 4 and message == "" {
+                if hex(at(src, i)) then { i = i + 1; k = k + 1 }
+                else message = "JSON unicode escape needs four hexadecimal digits"
+              }
+            } else message = "invalid JSON escape"
+          } else i = i + 1
+        }
+        if not closed and message == "" then message = "unterminated JSON string" else ()
+      } else if digit(b) or b == 45 then {
+        kind = tree.T_NUMBER
+        if b == 45 then i = i + 1 else ()
+        if at(src, i) == 48 then {
+          i = i + 1
+          if digit(at(src, i)) then message = "leading zero in JSON number" else ()
+        } else if at(src, i) >= 49 and at(src, i) <= 57 then {
+          while digit(at(src, i)) { i = i + 1 }
+        } else message = "JSON number needs an integer part"
+        if message == "" and at(src, i) == 46 then {
+          i = i + 1
+          if not digit(at(src, i)) then message = "JSON fraction needs a digit" else ()
+          while digit(at(src, i)) { i = i + 1 }
+        } else ()
+        if message == "" and (at(src, i) == 101 or at(src, i) == 69) then {
+          i = i + 1
+          if at(src, i) == 43 or at(src, i) == 45 then i = i + 1 else ()
+          if not digit(at(src, i)) then message = "JSON exponent needs a digit" else ()
+          while digit(at(src, i)) { i = i + 1 }
+        } else ()
+      } else if b >= 97 and b <= 122 then {
+        i = i + 1
+        while at(src, i) >= 97 and at(src, i) <= 122 { i = i + 1 }
+        let word = bytes.to_string_lossy(bytes.slice(src, start, i))
+        kind = tree.T_KEYWORD
+        if not list.contains(["true", "false", "null"], word) then message = "unknown JSON literal" else ()
+      } else {
+        i = i + 1
+        if not list.contains([123, 125, 91, 93, 58, 44], b) then message = "unexpected byte in JSON" else ()
+      }
+      if message != "" then {
+        guard recovering else err(lex.LexError { line: start_line, col: start - start_base + 1, message: message })
+        kind = tree.T_ERROR
+        if i == start then i = i + 1 else ()
+      } else ()
+      list.push(out, token(kind, start, i, start_line, start_base))
+    }
+  }
+  list.push(out, token(tree.T_EOF, n, n, line, base))
+  ok(out)
+}
+
+test "JSON literal validation and UTF-8 positions" {
+  let source = "{\"日本語\":\r\n -1.25e+3, \"ok\":true}"
+  let toks = scan(source, false) |> result.map_err((e) => e.message)!
+  let value = list.get(toks, 3)!
+  assert_eq(value.line, 2)
+  assert_eq(value.col, 2)
+  assert_eq(tree.token_text(bytes.from_string(source), value), "-1.25e+3")
+  let cr_tokens = scan("{\"a\":1,\r\"b\":2}", false) |> result.map_err((e) => e.message)!
+  assert(list.all(cr_tokens, (t) => t.line == 1))
+  for bad in ["01", "-", "1.", "1e+", "NaN", "\"\\x\"", "\"\\u12X4\"", "\"a\nb\"", "/* comment */", "'string'"] {
+    assert(result.is_err(scan(bad, false)))
+  }
+}

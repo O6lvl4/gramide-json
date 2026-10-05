@@ -1,0 +1,25 @@
+// JSON syntax as original gramide rules; reference: RFC 8259 §§2–7.
+import gramide.parser
+import gramide.parser.{ tok, lit, r, seq, alt, rep, opt, wrap, field, grammar }
+import self.lexer
+
+fn members(item: parser.Rule) -> parser.Rule = opt(seq([item, rep(seq([lit(","), item]))]))
+fn rules() -> parser.Grammar = grammar("document", [
+  ("document", wrap("document", r("value"))),
+  ("value", alt([r("object"), r("array"), tok("string"), tok("number"), wrap("true", lit("true")), wrap("false", lit("false")), wrap("null", lit("null"))])),
+  ("object", wrap("object", seq([lit("{"), members(r("pair")), lit("}")]))),
+  ("pair", wrap("pair", seq([field("name", tok("string")), lit(":"), field("value", r("value"))]))),
+  ("array", wrap("array", seq([lit("["), members(r("value")), lit("]")]))),
+])
+
+fn parses(src: String) -> Bool = match lexer.scan(src, false) {
+  ok(tokens) => result.is_ok(parser.parse(rules(), bytes.from_string(src), tokens)),
+  err(_) => false,
+}
+
+test "JSON accepts complete scalar and nested data documents" {
+  for good in ["null", "true", "false", "-0", "1.2e-4", "\"日本語\\uD83D\\uDE00\"", "[]", "{}", "{\"a\":[1,null,true,{\"b\":false}],\"empty\":{}}"] { assert(parses(good)) }
+}
+test "JSON rejects trailing commas missing values and extra documents" {
+  for bad in ["", "[1,]", "{\"a\":1,}", "{a:1}", "{\"a\":}", "[1 2]", "{}[]", "true false", "{\"a\":[1,2}"] { assert(not parses(bad)) }
+}

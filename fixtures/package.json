@@ -1,0 +1,10 @@
+{
+  "name": "gramide-fixture",
+  "version": "0.1.0",
+  "description": "構文木 🌳",
+  "private": true,
+  "scripts": { "test": "gramide check example.json" },
+  "numbers": [0, -0, 123, -1.5, 2e10, 3.1e-4],
+  "nested": [{"enabled": false}, null, []],
+  "escapes": "\u65e5\u672c\u8a9e\n\t\\\""
+}
