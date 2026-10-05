@@ -1,15 +1,19 @@
 // JSON syntax as original gramide rules; reference: RFC 8259 §§2–7.
 import gramide.parser
-import gramide.parser.{ tok, lit, r, seq, alt, rep, opt, wrap, field, grammar }
+import gramide.parser.{ tok, lit, r, seq, alt, rep, opt, wrap, field, grammar, recover_all, ahead }
 import self.lexer
 
-fn members(item: parser.Rule) -> parser.Rule = opt(seq([item, rep(seq([lit(","), item]))]))
+// Item boundaries let the shared incremental engine re-lex/re-read a member
+// or array value instead of rescanning the document. In strict mode these
+// operators still require exactly `item`; separators/trailing-comma rules stay.
+fn member_item(item: parser.Rule, close: String) -> parser.Rule = recover_all(seq([item, ahead(alt([lit(","), lit(close)]))]))
+fn members(item: parser.Rule, close: String) -> parser.Rule = opt(seq([member_item(item, close), rep(seq([lit(","), member_item(item, close)]))]))
 fn rules() -> parser.Grammar = grammar("document", [
   ("document", wrap("document", r("value"))),
   ("value", alt([r("object"), r("array"), tok("string"), tok("number"), wrap("true", lit("true")), wrap("false", lit("false")), wrap("null", lit("null"))])),
-  ("object", wrap("object", seq([lit("{"), members(r("pair")), lit("}")]))),
+  ("object", wrap("object", seq([lit("{"), members(r("pair"), "}"), lit("}")]))),
   ("pair", wrap("pair", seq([field("name", tok("string")), lit(":"), field("value", r("value"))]))),
-  ("array", wrap("array", seq([lit("["), members(r("value")), lit("]")]))),
+  ("array", wrap("array", seq([lit("["), members(r("value"), "]"), lit("]")]))),
 ])
 
 fn parses(src: String) -> Bool = match lexer.scan(src, false) {

@@ -1,0 +1,159 @@
+import self.grammar
+import self.lexer
+import self.table
+import gramide.parser
+import gramide.incremental
+import gramide.tree
+
+fn strict_json(mut c: parser.Compiled, source: Bytes) -> Result[parser.Parsed, String] = {
+  let toks = lexer.scan(bytes.to_string_lossy(source), false) |> result.map_err((e) => e.message)!
+  parser.parse_with(c, source, toks) |> result.map_err((e) => parser.format_failure(e))
+}
+
+test "JSON item boundaries preserve strict syntax and the committed table" {
+  var c = table.compiled()
+  for text in ["null", "[]", "{}", "[1,true,{},[],null]", "{\"a\":1,\"b\":{\"c\":[false,\"value\"]}}"] {
+    let source = bytes.from_string(text)
+    let toks = lexer.scan(text, false)!
+    let dynamic = parser.parse(grammar.rules(), source, toks)!
+    let compiled = parser.parse_with(c, source, toks)!
+    assert_eq(tree.sexp(dynamic.root, dynamic.names), tree.sexp(compiled.root, compiled.names))
+    assert(incremental.same(incremental.materialize(incremental.from_parsed(compiled, source, c)), compiled))
+  }
+  for text in ["", "[1,]", "[1 2]", "{\"a\":1,}", "{\"a\":}", "{}[]"] {
+    assert(result.is_err(strict_json(c, bytes.from_string(text))))
+  }
+}
+
+test "nested JSON key and string edits reuse local items and match fresh trees" {
+  var c = table.compiled()
+  var source = bytes.from_string("[{\"long_property_name\":\"long_string_value\",\"nested\":{\"child_property_name\":[1,2,3]}}]")
+  var doc = incremental.from_parsed(strict_json(c, source)!, source, c)
+  assert(list.len(incremental.items(doc)) > 5, "object members and array values must form real incremental items")
+  for word in ["long_property_name", "long_string_value", "child_property_name"] {
+    let at = (string.index_of(bytes.to_string_lossy(source), word) ?? -10) + 6
+    assert(at >= 0)
+    let before = incremental.materialize(doc)
+    let ids = incremental.node_ids(doc)
+    let add = incremental.Edit { start: at, old_end: at, new_end: at + 1 }
+    source = incremental.apply(source, add, bytes.from_string("x"))
+    assert_eq(incremental.reparse_status(doc, source, add, (s, r) => lexer.scan(s, r), c), incremental.DONE)
+    let got = incremental.materialize(doc)
+    let whole = strict_json(c, source)!
+    assert(incremental.same(got, whole), incremental.first_difference(got, whole))
+    assert_eq(incremental.node_id_breaks(before, ids, got, incremental.node_ids(doc), add), "")
+    let remove = incremental.Edit { start: at, old_end: at + 1, new_end: at }
+    source = incremental.apply(source, remove, bytes.new(0))
+    assert_eq(incremental.reparse_status(doc, source, remove, (s, r) => lexer.scan(s, r), c), incremental.DONE)
+    assert(incremental.same(incremental.materialize(doc), strict_json(c, source)!))
+  }
+}
+
+fn invalid_incremental(text: String, start: Int, end: Int, replacement: String) -> Result[Unit, String] = {
+  var c = table.compiled()
+  let source = bytes.from_string(text)
+  let parsed = strict_json(c, source)!
+  var doc = incremental.from_parsed(parsed, source, c)
+  let ids = incremental.node_ids(doc)
+  let next_id = doc.next_id
+  let next_node = doc.next_node
+  let insert = bytes.from_string(replacement)
+  let edit = incremental.Edit { start: start, old_end: end, new_end: start + bytes.len(insert) }
+  let after = incremental.apply(source, edit, insert)
+  assert(result.is_err(strict_json(c, after)), "the malformed edit must be strictly rejected")
+  assert(incremental.reparse_status(doc, after, edit, (s, r) => lexer.scan(s, r), c) != incremental.DONE, "a malformed comma-list edit must request full parsing")
+  assert(incremental.same(incremental.materialize(doc), parsed), "fallback must leave the document unchanged")
+  assert_eq(incremental.node_ids(doc), ids)
+  assert_eq(doc.next_id, next_id)
+  assert_eq(doc.next_node, next_node)
+  ok(())
+}
+
+test "malformed JSON item splits and orphaned commas always fall back" {
+  let _ = invalid_incremental("[1]", 1, 2, "1 2")!
+  let _ = invalid_incremental("[\"a\"]", 1, 4, "\"a\" \"b\"")!
+  let _ = invalid_incremental("[{}]", 1, 3, "{}{}")!
+  let _ = invalid_incremental("{\"a\":1}", 1, 6, "\"a\":1 \"b\":2")!
+  let _ = invalid_incremental("[1,2]", 1, 2, "")!
+  let _ = invalid_incremental("[1,2]", 3, 4, "")!
+  let _ = invalid_incremental("{\"a\":1,\"b\":2}", 1, 6, "")!
+  let _ = invalid_incremental("{\"a\":1,\"b\":2}", 7, 12, "")!
+  let _ = invalid_incremental("[\"a\",\"b\"]", 4, 5, "")!
+}
+
+fn valid_incremental(text: String, start: Int, end: Int, replacement: String) -> Result[Unit, String] = {
+  var c = table.compiled()
+  let source = bytes.from_string(text)
+  let parsed = strict_json(c, source)!
+  var doc = incremental.from_parsed(parsed, source, c)
+  let ids = incremental.node_ids(doc)
+  let insert = bytes.from_string(replacement)
+  let edit = incremental.Edit { start: start, old_end: end, new_end: start + bytes.len(insert) }
+  let after = incremental.apply(source, edit, insert)
+  let whole = strict_json(c, after)!
+  if incremental.reparse_status(doc, after, edit, (s, r) => lexer.scan(s, r), c) != incremental.DONE then {
+    assert(incremental.same(incremental.materialize(doc), parsed))
+    doc = incremental.rebuilt(doc, whole, after, c, edit)
+  } else ()
+  let got = incremental.materialize(doc)
+  assert(incremental.same(got, whole), incremental.first_difference(got, whole))
+  assert_eq(incremental.node_id_breaks(parsed, ids, got, incremental.node_ids(doc), edit), "")
+  ok(())
+}
+
+test "valid JSON item insertion deletion and numeric joins remain exact" {
+  let _ = valid_incremental("[1]", 1, 2, "")!
+  let _ = valid_incremental("[1,2]", 1, 4, "")!
+  let _ = valid_incremental("{\"a\":1}", 1, 6, "")!
+  let _ = valid_incremental("{\"a\":1,\"b\":2}", 1, 12, "")!
+  let _ = valid_incremental("[1,2]", 2, 3, "")!
+  let _ = valid_incremental("[1]", 1, 2, "1,2")!
+  let _ = valid_incremental("{\"a\":1}", 1, 6, "\"a\":1,\"b\":2")!
+  let _ = valid_incremental("[true]", 1, 5, "false")!
+}
+
+fn mutation_matches(mut c: parser.Compiled, text: String, start: Int, end: Int, replacement: String) -> Result[Unit, String] = {
+  let source = bytes.from_string(text)
+  let parsed = strict_json(c, source)!
+  var doc = incremental.from_parsed(parsed, source, c)
+  let ids = incremental.node_ids(doc)
+  let insert = bytes.from_string(replacement)
+  let edit = incremental.Edit { start: start, old_end: end, new_end: start + bytes.len(insert) }
+  let after = incremental.apply(source, edit, insert)
+  let status = incremental.reparse_status(doc, after, edit, (s, r) => lexer.scan(s, r), c)
+  let context = text + " edit " + int.to_string(start) + ":" + int.to_string(end) + " -> " + replacement
+  if status == incremental.DONE then match strict_json(c, after) {
+    err(e) => assert(false, "incremental accepted malformed JSON: " + context + " | " + e),
+    ok(whole) => {
+      let got = incremental.materialize(doc)
+      assert(incremental.same(got, whole), context + " | " + incremental.first_difference(got, whole))
+      assert_eq(incremental.node_id_breaks(parsed, ids, got, incremental.node_ids(doc), edit), "")
+    },
+  } else {
+    assert(incremental.same(incremental.materialize(doc), parsed), "fallback mutated the document: " + context)
+    assert_eq(incremental.node_ids(doc), ids)
+  }
+  ok(())
+}
+
+test "JSON incremental byte mutations either match strict whole parsing or safely fall back" {
+  var c = table.compiled()
+  for text in ["[1]", "[1,2,3]", "{\"a\":1,\"b\":2}", "[\"abc\",\"def\"]", "{\"a\":[1,2],\"b\":{\"key\":\"value\"}}", "[{},[],true,false,null,0,-1.2e+3]", "\"scalar\"", "true"] {
+    let n = bytes.len(bytes.from_string(text))
+    var at = 0
+    while at <= n {
+      for insert in [" ", ",", ";", "[", "]", "{", "}", ":", "\"", "0", "x"] {
+        let _ = mutation_matches(c, text, at, at, insert)!
+        if at < n then { let _ = mutation_matches(c, text, at, at + 1, insert)! } else ()
+      }
+      if at < n then { let _ = mutation_matches(c, text, at, at + 1, "")! } else ()
+      at = at + 1
+    }
+  }
+}
+
+test "JSON incremental UTF-8 edits and CRLF prefixes preserve byte and line positions" {
+  let _ = valid_incremental("{\"日本語\":\"東京abc\"}", 5, 5, "x")!
+  let _ = valid_incremental("{\"日本語\":\"東京abc\"}", 20, 20, "🙂")!
+  let _ = valid_incremental("{\"日本語\":\"東京abc\"}", 0, 0, "\r\n")!
+}
