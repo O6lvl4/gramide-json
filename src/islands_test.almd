@@ -1,0 +1,195 @@
+// Focused candidate tests. Original package tests remain in package_test.
+import self.islands_grammar as candidate
+import self.`mod` as pkg
+import self.recovery_grammar
+import self.recovery_test as check
+import self.lexer
+import gramide.parser
+import gramide.tree
+import gramide.lang
+
+fn compiled_ids() -> Result[(parser.Compiled, Map[String, Int]), String] = {
+  let grammar = candidate.rules()!
+  var ids: Map[String, Int] = [:]
+  let _ = parser.compile_named(grammar, ids)
+  ok((candidate.compiled()!, ids))
+}
+fn numbered(c: parser.Compiled, text: String) -> Result[List[Int], String] = {
+  let source = bytes.from_string(text)
+  let toks = lexer.scan(text, true) |> result.map_err((e) => e.message)!
+  let n = parser.number_tokens(c, source, parser.TokenInput { tokens: toks })
+  ok(parser.pair_brackets(n.pairs, if n.balanced then [] else parser.line_leads(source, toks)))
+}
+fn direct_repair(c: parser.Compiled, num: List[Int], id: Int, mode: Int, repair_at: Int, repair_atom: Int) -> (parser.Out, List[tree.Node], Int) = {
+  var out: List[tree.Node] = []
+  var exp: List[Int] = []
+  var far = parser.far_cell()
+  if repair_at >= 0 then parser.set_repair(far, repair_at, repair_atom) else ()
+  let o = parser.parse_rule(c, num, out, exp, far, mode, id, 0)
+  (o, out, parser.flags_of(far))
+}
+fn direct(c: parser.Compiled, num: List[Int], id: Int, mode: Int, repair: Bool) -> (parser.Out, List[tree.Node], Int) =
+  direct_repair(c, num, id, mode, if repair then parser.eof_index(num) else -1, parser.A_RBRACE)
+fn no_errors(nodes: List[tree.Node], error: Int) -> Bool = {
+  var yes = true
+  for node in nodes { yes = yes and parser.error_nodes(node, error) == 0 }
+  yes
+}
+fn root_body(rule: parser.Rule) -> parser.Rule = match rule {
+  parser.Wrap(_, parser.RecoverAll(body, _)) => body,
+  _ => parser.nothing(),
+}
+
+test "island heads preserve every old rule and the exact strict document body" {
+  let old = recovery_grammar.rules()
+  let fresh = candidate.rules()!
+  assert_eq(old.start, fresh.start)
+  for (name, rule) in map.entries(old.rules) {
+    let after = map.get(fresh.rules, name)!
+    if name == "document" then assert_eq(root_body(rule), root_body(after))
+    else assert_eq(rule, after)
+  }
+  let parts = compiled_ids()!
+  let c = parts.0
+  var pending = [map.get(parts.1, "island_value")!, map.get(parts.1, "island_pair")!]
+  var visited: Map[Int, Bool] = [:]
+  while not list.is_empty(pending) {
+    let id = list.pop(pending)!
+    if map.contains(visited, id) then () else {
+      map.insert(visited, id, true)
+      let op = parser.arena_op(c, id)
+      assert(op.kind != parser.K_RECOVER and op.kind != parser.K_RECOVER_ALL and op.kind != parser.K_RECOVER_LINES)
+      assert(not (op.kind == parser.K_LIT and (parser.spelled(c, op, parser.A_RBRACK) or parser.spelled(c, op, parser.A_RBRACE))))
+      for child in parser.validation_children(c, op, false) { list.push(pending, child) }
+    }
+  }
+}
+
+test "one root punctuation gap has complete interiors and actual owned close" {
+  let parts = compiled_ids()!
+  let c = parts.0
+  let id = map.get(parts.1, "pair_gap_object_head")!
+  for text in [
+    "{\"a\":{\"x\":1} \"b\":2}", "{\"a\" [1,{\"b\":2}],\"c\":3}",
+    "{\"a\":1 \"b\":2}", "{\"a\":1,\"b\":[] \"c\":{}}",
+    "{\"a\":1,\"b\" [],\"c\":3}", "{\"a\":1,\"b\" {\"c\":[2]}}",
+    " \r\n{\"雪\":{\"日\":[1]} \"月\":false}\r\n",
+  ] {
+    let num = numbered(c, text)!
+    for repair in [false, true] {
+      let built = direct(c, num, id, parser.recovering(), repair)
+      let trial = direct(c, num, id, parser.trial_mode(parser.recovering()), repair)
+      assert(built.0.ok)
+      assert_eq(built.0, trial.0)
+      assert_eq(built.0.pos, parser.eof_index(num))
+      assert(parser.paired_head_span(num, 0, built.0.pos))
+      assert_eq(parser.match_of(num, built.0.pos - 1), 0)
+      assert(no_errors(built.1, parser.error_kind(c)))
+      assert_eq(built.2, 0)
+    }
+  }
+}
+
+test "one gap head refuses extra faults virtual closes and nested recovery" {
+  let parts = compiled_ids()!
+  let c = parts.0
+  let id = map.get(parts.1, "pair_gap_object_head")!
+  for text in [
+    "{}", "{\"a\":1,\"b\":2}", "{\"a\":1 \"b\":2 \"c\":3}",
+    "{\"a\" 1,\"b\" 2}", "{\"a\" 1 \"b\":2}", "{\"a\": \"b\":2}",
+    "{\"a\":1,,\"b\":2}", "{\"a\":1 \"b\":2,}",
+    "{\"a\":{\"x\":1 \"y\":2} \"b\":3}", "{\"a\":[1,] \"b\":2}",
+    "{\"a\":[1,@,2] \"b\":2}", "{\"a\":{\"x\":1} \"b\":2",
+    "{\"a\":{\"x\":1} \"b\":2]", "{{\"a\":1 \"b\":2}",
+    "{\"a\":{\"x\":1 \"b\":2}",
+    "{\"a\":[1} \"b\":2}", "{\"a\":{\"x\":1] \"b\":2}",
+    "{\"a\":[1 \"b\":2}", "{\"a\":01 \"b\":2}",
+    "{\"a\":1e+ \"b\":2}", "{\"a\":\"\\x\" \"b\":2}",
+  ] {
+    let num = numbered(c, text)!
+    for repair in [false, true] {
+      let built = direct(c, num, id, parser.recovering(), repair)
+      let trial = direct(c, num, id, parser.trial_mode(parser.recovering()), repair)
+      assert(not built.0.ok)
+      assert_eq(built.0.pos, 0)
+      assert_eq(built.1, [])
+      assert_eq(built.0, trial.0)
+      assert_eq(trial.1, [])
+    }
+    // A virtual close at the exact interior failure is more demanding than
+    // one at EOF. Try both JSON closer kinds at every actual token boundary.
+    var at = 0
+    while at <= parser.eof_index(num) {
+      for atom in [parser.A_RBRACK, parser.A_RBRACE] {
+        let built = direct_repair(c, num, id, parser.recovering(), at, atom)
+        let trial = direct_repair(c, num, id, parser.trial_mode(parser.recovering()), at, atom)
+        assert(not built.0.ok)
+        assert_eq(built.0.pos, 0)
+        assert_eq(built.1, [])
+        assert_eq(built.0, trial.0)
+        assert_eq(trial.1, [])
+      }
+      at = at + 1
+    }
+  }
+}
+
+test "document prefix leaves final value at EOF and makes real progress" {
+  let parts = compiled_ids()!
+  let c = parts.0
+  let id = map.get(parts.1, "document_prefix_head")!
+  for row in [("[1] {\"k\":2} true", 8), ("1 2 3", 2), ("[1] {\"k\":2} true null", 9), ("\"日\" {} [] false", 5), ("1 2 @", 2)] {
+    let num = numbered(c, row.0)!
+    for repair in [false, true] {
+      let built = direct(c, num, id, parser.recovering(), repair)
+      let trial = direct(c, num, id, parser.trial_mode(parser.recovering()), repair)
+      assert(built.0.ok and built.0.pos > 0 and built.0.pos < parser.eof_index(num))
+      assert_eq(built.0.pos, row.1)
+      assert_eq(built.0, trial.0)
+      assert(no_errors(built.1, parser.error_kind(c)))
+      assert_eq(built.2, 0)
+      for node in built.1 { assert(node.end <= row.1) }
+    }
+  }
+  for text in ["1", "1 2", "[1] {}", "[1,@,2] true false", "1 [2,] 3", "1 {\"a\":2 3", "[[1,] true false"] {
+    let num = numbered(c, text)!
+    let built = direct(c, num, id, parser.recovering(), true)
+    assert(not built.0.ok)
+    assert_eq(built.0.pos, 0)
+    assert_eq(built.1, [])
+  }
+}
+
+test "root skip keeps the original bounds for island prefix plans" {
+  let parts = compiled_ids()!
+  let c = parts.0
+  // Test the document rule, not Compiled.start's extra consuming EOF wrapper.
+  let document = map.get(parts.1, "document")!
+  let num = numbered(c, "[1] {\"k\":2} true")!
+  for bound in [0, 3, 8, 9] {
+    let mode = parser.with_bound(parser.recovering(), bound)
+    let built = direct(c, num, document, mode, false)
+    let trial = direct(c, num, document, parser.trial_mode(mode), false)
+    assert_eq(built.0, trial.0)
+    if built.0.ok then {
+      assert(built.0.pos <= bound)
+      for node in built.1 { assert(node.end <= bound) }
+    } else assert_eq(built.1, [])
+  }
+}
+
+test "new root heads retain all three witnesses without accepting invalid JSON" {
+  let language = lang.compile(pkg.recovery_definition())
+  for row in [
+    ("{\"a\":{\"x\":1} \"b\":2}", [("pair", 1, 12), ("object", 5, 12), ("pair", 13, 18)]),
+    ("{\"a\" [1,{\"b\":2}],\"c\":3}", [("string", 1, 4), ("array", 5, 16), ("object", 8, 15), ("pair", 17, 22)]),
+    ("[1] {\"k\":2} true", [("array", 0, 3), ("object", 4, 11), ("pair", 5, 10), ("true", 12, 16)]),
+  ] {
+    assert(result.is_err(lang.parse_lang(language, "island-witness.json", row.0)))
+    let read = lang.read_lang(language, "island-witness.json", row.0)!
+    assert(option.is_some(read.error))
+    assert(string.starts_with(read.error ?? "", "island-witness.json:"))
+    for record in row.1 { assert_eq(check.matches(read.parsed.root, read.parsed, record.0, record.1, record.2), 1) }
+    check.coordinates(read.parsed, bytes.from_string(row.0))
+  }
+}

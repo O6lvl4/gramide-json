@@ -1,0 +1,106 @@
+// Package-owned tests for the public opt-in ordinary-reader API.
+import self.`mod` as pkg
+import self.islands_grammar
+import self.recovery_table
+import self.grammar
+import self.table
+import self.lexer
+import self.recovery_test as check
+import gramide.parser
+import gramide.lang
+import gramide.tree
+import gramide.names
+import gramide.incremental
+
+fn guarded() -> Result[parser.Compiled, String] = islands_grammar.compiled()
+fn same_named(a: tree.Node, an: names.Names, b: tree.Node, bn: names.Names) -> Bool = {
+  guard names.name_at(an, a.kind) == names.name_at(bn, b.kind) and a.start == b.start and a.end == b.end and list.len(a.kids) == list.len(b.kids) else false
+  guard names.name_at(an, a.field) == names.name_at(bn, b.field) else false
+  var yes = true
+  var at = 0
+  for child in a.kids { yes = yes and (match list.get(b.kids, at) { some(other) => same_named(child, an, other, bn), none => false }); at = at + 1 }
+  yes
+}
+fn head(c: parser.Compiled, name: String) -> Int = {
+  var found = -1
+  var at = 0
+  for op in c.ops {
+    if op.kind == parser.K_PAIRED_HEAD_WRAP_SEQ and names.name_at(c.names, parser.kind_at(c, at)) == name then found = at else ()
+    at = at + 1
+  }
+  found
+}
+test "opt-in v2 table exactly matches annotated runtime compilation" {
+  assert_eq(recovery_table.table_format_version(), 2)
+  assert(result.is_ok(parser.validate_tables_v2(recovery_table.tables())))
+  assert_eq(recovery_table.compiled(), guarded()!)
+  assert_eq(parser.compile(grammar.rules()), table.compiled())
+  assert_eq(lang.compile(pkg.definition()).grammar, table.compiled())
+  assert_eq(lang.compile(pkg.recovery_definition()).grammar, recovery_table.compiled())
+}
+test "opt-in strict results preserve the default named tree and tokens" {
+  for text in ["null", "42", "[]", "{}", "[1,{\"a\":[2,true]}]", "\r\n{\"雪\":\"😀\"}\r\n"] {
+    let source = bytes.from_string(text)
+    let toks = lexer.scan(text, false) |> result.map_err((e) => e.message)!
+    let a = parser.parse_with(table.compiled(), source, toks) |> result.map_err((f) => parser.format_failure(f))!
+    let b = parser.parse_with(recovery_table.compiled(), source, toks) |> result.map_err((f) => parser.format_failure(f))!
+    assert_eq(a.toks, b.toks)
+    assert(same_named(a.root, a.names, b.root, b.names))
+  }
+}
+test "opt-in trailing heads retain complete members but report strict invalidity" {
+  for text in ["[1,]", "{\"a\":1,}", "[{\"a\":1},]", "{\"a\":[1,2],}"] {
+    let l = lang.compile(pkg.recovery_definition())
+    assert(result.is_err(lang.parse_lang(l, "trailing.json", text)))
+    let read = lang.read_lang(l, "trailing.json", text)!
+    assert(option.is_some(read.error))
+    assert(string.starts_with(read.error ?? "", "trailing.json:"))
+    assert_eq(read.errors, 0)
+    check.coordinates(read.parsed, bytes.from_string(text))
+  }
+}
+test "opt-in root prefix retains the complete source subtree" {
+  let text = "{[{\"a\":1},{\"b\":2}]"
+  let read = lang.read_lang(lang.compile(pkg.recovery_definition()), "prefix.json", text)!
+  assert(option.is_some(read.error))
+  for record in [("array", 1, 18), ("object", 2, 9), ("object", 10, 17)] {
+    assert_eq(check.matches(read.parsed.root, read.parsed, record.0, record.1, record.2), 1)
+  }
+}
+test "opt-in head refuses a real closer owned by an inner opener and rolls back" {
+  let text = "[[1,]"
+  let source = bytes.from_string(text)
+  let toks = lexer.scan(text, true) |> result.map_err((e) => e.message)!
+  let c = recovery_table.compiled()
+  let numbered = parser.number_tokens(c, source, parser.TokenInput { tokens: toks })
+  let num = parser.pair_brackets(numbered.pairs, parser.line_leads(source, toks))
+  let id = head(c, "array")
+  assert(id >= 0)
+  assert_eq(parser.match_of(num, 4), 1)
+  for mode in [parser.recovering(), parser.trial_mode(parser.recovering())] {
+    var out: List[tree.Node] = []
+    var exp: List[Int] = []
+    var far = parser.far_cell()
+    let result = parser.parse_rule(c, num, out, exp, far, mode, id, 0)
+    assert(not result.ok)
+    assert_eq(result.pos, 0)
+    assert_eq(out, [])
+  }
+}
+test "opt-in recovery keeps UTF8 and CRLF coordinates and original filename" {
+  let text = " \r\n[\"日\",\r\n]\t"
+  let l = lang.compile(pkg.recovery_definition())
+  let read = lang.read_lang(l, "unicode.json", text)!
+  assert(string.starts_with(read.error ?? "", "unicode.json:"))
+  check.coordinates(read.parsed, bytes.from_string(text))
+  assert_eq(check.matches(read.parsed.root, read.parsed, "string", 4, 9), 1)
+}
+test "opt-in generic constructor materializes the real recovered reader output" {
+  var l = lang.compile(pkg.recovery_definition())
+  for text in ["[1,]", "[1,@,2] true", "[{\"a\":1},{\"b\":2}", "{[{\"a\":1},{\"b\":2}]"] {
+    let read = lang.read_lang(l, "recovered.json", text)!
+    let doc = incremental.from_parsed(read.parsed, bytes.from_string(text), l.grammar)
+    assert_eq(incremental.materialize(doc), read.parsed)
+    assert(option.is_some(read.error))
+  }
+}

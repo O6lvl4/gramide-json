@@ -1,0 +1,63 @@
+// Local candidate: additional root recovery heads, never strict syntax.
+// The original recovery_grammar module and every strict body remain unchanged.
+import gramide.parser
+import gramide.parser.{ tok, lit, r, seq, alt, rep, opt, wrap, field, ahead }
+import self.recovery_grammar
+
+fn actual_close(close: String) -> parser.Rule = seq([ahead(parser.keep(close)), parser.any()])
+fn island_members(item: parser.Rule) -> parser.Rule = opt(seq([item, rep(seq([lit(","), item]))]))
+
+// No Recover operation or ordinary literal closer occurs in this graph.
+// Actual-close sequences prevent recovering_seq and active repairs from
+// satisfying a missing closer. Every successful island consumes real tokens.
+fn island_rules() -> List[(String, parser.Rule)] = [
+  ("island_value", alt([r("island_object"), r("island_array"), tok("string"), tok("number"), wrap("true", lit("true")), wrap("false", lit("false")), wrap("null", lit("null"))])),
+  ("island_pair", wrap("pair", seq([field("name", tok("string")), lit(":"), field("value", r("island_value"))]))),
+  ("island_object", wrap("object", seq([lit("{"), island_members(r("island_pair")), actual_close("}")]))),
+  ("island_array", wrap("array", seq([lit("["), island_members(r("island_value")), actual_close("]")]))),
+]
+
+// Exactly one omitted root comma; every pair and nested value is complete.
+fn comma_gap() -> parser.Rule = seq([
+  r("island_pair"), rep(seq([lit(","), r("island_pair")])),
+  r("island_pair"), rep(seq([lit(","), r("island_pair")])),
+])
+// Exactly one omitted root colon. The damaged key/value stays unwrapped;
+// there is no fabricated pair node over a substring without a colon.
+fn colon_gap() -> parser.Rule = seq([
+  rep(seq([r("island_pair"), lit(",")])),
+  tok("string"), r("island_value"),
+  rep(seq([lit(","), r("island_pair")])),
+])
+fn pair_gap_object_head() -> parser.Rule = wrap("object", seq([
+  lit("{"), alt([comma_gap(), colon_gap()]), actual_close("}"),
+]))
+
+// At least two complete values plus a real remaining token. A final value
+// ending at actual EOF is rolled back by !EOF and remains the resume body's.
+// Do not use canonical value here: it can recover ERROR or virtual closers.
+fn document_prefix_head() -> parser.Rule = seq([
+  r("island_value"), r("island_value"), parser.nott(tok("eof")),
+  rep(seq([r("island_value"), parser.nott(tok("eof"))])),
+])
+
+fn selected_heads() -> List[String] = ["pair_gap_object_head", "trailing_array_head", "trailing_object_head"]
+
+fn rules() -> Result[parser.Grammar, String] = {
+  let base = recovery_grammar.rules()
+  let document = map.get(base.rules, "document")!
+  let replaced = match document {
+    parser.Wrap(kind, parser.RecoverAll(body, parser.Alt(heads))) =>
+      ok(wrap(kind, parser.recover_all_keeping(body, alt([r("document_prefix_head"), r("pair_gap_object_head")] + heads)))),
+    _ => err("island candidate requires the frozen root Wrap/RecoverAll/Alt shape"),
+  }!
+  var named = base.rules
+  map.insert(named, "document", replaced)
+  for (name, rule) in island_rules() + [("pair_gap_object_head", pair_gap_object_head()), ("document_prefix_head", document_prefix_head())] {
+    guard not map.contains(named, name) else err("island candidate rule collision: " + name)
+    map.insert(named, name, rule)
+  }
+  ok(parser.Grammar { ...base, rules: named })
+}
+
+fn compiled() -> Result[parser.Compiled, String] = parser.compile_with_paired_heads(rules()!, selected_heads())

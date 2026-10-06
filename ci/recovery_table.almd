@@ -1,0 +1,6 @@
+import gramide.tables
+import self.islands_grammar
+effect fn main() -> Result[Unit, String] = {
+  println(tables.render_with_paired_heads("json", islands_grammar.rules()!, islands_grammar.selected_heads())!)
+  ok(())
+}
