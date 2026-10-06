@@ -41,11 +41,11 @@ acceptance is unchanged: missing values, extra documents and trailing commas
 remain errors. Damaged-document recovery is still a separate, limited reader
 behavior, and no recovered-symbol capability is advertised.
 
-The incremental item boundaries require the parent-window safeguards in
-[gramide #87](https://github.com/O6lvl4/gramide/pull/87). This draft pins that
-core development branch to commit `4916bbdce30bd2814429e69a98450faf8c02e1b8`
-in `almide.lock`. It does not claim that the released v0.2.11 core includes
-these fixes; replace the development pin with the next core release after merge.
+The incremental item boundaries use the parent-window and identity safeguards
+merged in [gramide #87](https://github.com/O6lvl4/gramide/pull/87). This package
+pins core main at commit `79ab321eb152039388ae592064625567ab6d2226` in `almide.lock`.
+The released v0.2.11 tag does not include those later fixes; the exact Git pin
+makes the dependency reproducible until a new core release is selected.
 
 ## Missing-closer recovery
 
