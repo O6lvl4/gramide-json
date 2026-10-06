@@ -1,6 +1,6 @@
 // Package-owned tests for the public opt-in ordinary-reader API.
 import self.`mod` as pkg
-import self.recovery_grammar
+import self.islands_grammar
 import self.recovery_table
 import self.grammar
 import self.table
@@ -12,7 +12,7 @@ import gramide.tree
 import gramide.names
 import gramide.incremental
 
-fn guarded() -> Result[parser.Compiled, String] = parser.compile_with_paired_heads(recovery_grammar.rules(), ["trailing_array_head", "trailing_object_head"])
+fn guarded() -> Result[parser.Compiled, String] = islands_grammar.compiled()
 fn same_named(a: tree.Node, an: names.Names, b: tree.Node, bn: names.Names) -> Bool = {
   guard names.name_at(an, a.kind) == names.name_at(bn, b.kind) and a.start == b.start and a.end == b.end and list.len(a.kids) == list.len(b.kids) else false
   guard names.name_at(an, a.field) == names.name_at(bn, b.field) else false

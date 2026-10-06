@@ -2,3 +2,4 @@
 import self.incremental_test as _incremental_test
 import self.recovery_test as _recovery_test
 import self.paired_recovery_test as _paired_recovery_test
+import self.islands_test as _islands_test
