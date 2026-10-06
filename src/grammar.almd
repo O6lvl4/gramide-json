@@ -1,12 +1,16 @@
 // JSON syntax as original gramide rules; reference: RFC 8259 §§2–7.
 import gramide.parser
-import gramide.parser.{ tok, lit, r, seq, alt, rep, opt, wrap, field, grammar, recover_all, ahead }
+import gramide.parser.{ tok, lit, r, seq, alt, rep, opt, wrap, field, grammar, recover, ahead }
 import self.lexer
 
 // Item boundaries let the shared incremental engine re-lex/re-read a member
 // or array value instead of rescanning the document. In strict mode these
 // operators still require exactly `item`; separators/trailing-comma rules stay.
-fn member_item(item: parser.Rule, close: String) -> parser.Rule = recover_all(seq([item, ahead(alt([lit(","), lit(close)]))]))
+// Recovery is bounded by the owning delimiter. Actual EOF may satisfy a
+// completed member boundary during recovery, while the outer mandatory closer
+// still rejects an incomplete strict document. Local windows must keep the
+// unchanged head token and require the exact endpoint before temporary EOF.
+fn member_item(item: parser.Rule, close: String) -> parser.Rule = recover(seq([item, ahead(alt([lit(","), lit(close), tok("eof")]))]))
 fn members(item: parser.Rule, close: String) -> parser.Rule = opt(seq([member_item(item, close), rep(seq([lit(","), member_item(item, close)]))]))
 fn rules() -> parser.Grammar = grammar("document", [
   ("document", wrap("document", r("value"))),

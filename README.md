@@ -46,3 +46,20 @@ The incremental item boundaries require the parent-window safeguards in
 core development branch to commit `4916bbdce30bd2814429e69a98450faf8c02e1b8`
 in `almide.lock`. It does not claim that the released v0.2.11 core includes
 these fixes; replace the development pin with the next core release after merge.
+
+## Missing-closer recovery
+
+Container members use bounded recovery and a comma, their own closing delimiter,
+or actual EOF as their non-consuming boundary. This preserves complete members
+when an outer closer is missing; the strict grammar still requires each closer.
+The ordinary `lang.read_lang` API reports invalidity and unpaired token indices
+even when the recovered tree has no `ERROR` nodes. A recovered tree is not proof
+that JSON is valid or that every malformed input retains useful structure.
+
+`src/recovery_test.almd` covers missing array/object closers, complete empty
+containers, nested missing closers, UTF-8 byte coordinates, CRLF, strict rejection,
+diagnostics and gaps, and ordinary-reader/direct-recovery parity. The complete
+serial package test root is `src/package_test.almd`; run `bash ci/check.sh` for
+those tests plus the existing CLI, generated-table and Python oracle gates.
+No additional core API or dependency pin is required. Root-prefix recovery
+remains unsupported.
