@@ -2,9 +2,17 @@ import gramide.package_api
 import self.lexer
 import self.symbols
 import self.table
+import self.recovery_table
 let VERSION = "0.1.0"
 fn definition() -> package_api.Definition = package_api.Definition {
   id: "json", package_name: "gramide-json", version: VERSION, extensions: [".json"],
   capabilities: ["check", "tokens", "parse", "outline", "symbols", "tags", "map"],
   lexer: () => (source, recovering) => lexer.scan(source, recovering), grammar: () => table.compiled(), sep: ".", symbols: symbols.symbol_rules()
+}
+
+// Explicit opt-in: enhanced ordinary recovery keeps a root recovery Item.
+// The strict JSON language is unchanged; this is not a Prepared certificate.
+fn recovery_definition() -> package_api.Definition = {
+  let base = definition()
+  package_api.Definition { ...base, grammar: () => recovery_table.compiled() }
 }

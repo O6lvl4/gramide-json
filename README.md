@@ -42,10 +42,13 @@ remain errors. Damaged-document recovery is still a separate, limited reader
 behavior, and no recovered-symbol capability is advertised.
 
 The incremental item boundaries use the parent-window and identity safeguards
-merged in [gramide #87](https://github.com/O6lvl4/gramide/pull/87). This package
-pins core main at commit `79ab321eb152039388ae592064625567ab6d2226` in `almide.lock`.
-The released v0.2.11 tag does not include those later fixes; the exact Git pin
-makes the dependency reproducible until a new core release is selected.
+merged in [gramide #87](https://github.com/O6lvl4/gramide/pull/87). The optional
+paired-head reader additionally requires the APIs in draft
+[gramide #88](https://github.com/O6lvl4/gramide/pull/88). This draft pins core
+`feat/paired-recovery-heads` at `e756fa17ea486ec84d9007dbad6ab24ba3b509e0`
+in `almide.lock`; that core change is not yet merged into main. The released
+v0.2.11 tag does not contain these later capabilities. Keep the exact Git pin
+until the guarded commit is reachable from main or a containing release is selected.
 
 ## Missing-closer recovery
 
@@ -61,5 +64,79 @@ containers, nested missing closers, UTF-8 byte coordinates, CRLF, strict rejecti
 diagnostics and gaps, and ordinary-reader/direct-recovery parity. The complete
 serial package test root is `src/package_test.almd`; run `bash ci/check.sh` for
 those tests plus the existing CLI, generated-table and Python oracle gates.
-No additional core API or dependency pin is required. Root-prefix recovery
-remains unsupported.
+These existing checks continue to exercise `definition()` and its default
+table. Root-prefix recovery remains unsupported by that default Definition.
+
+## Optional paired-head reader
+
+`recovery_definition()` is the supported opt-in entry point for richer ordinary
+recovery. It uses a separate `recovery_grammar.almd` and generated v2
+`recovery_table.almd`. `definition()`, the default grammar/table, scanner and
+CLI registration keep their existing behavior. Strict JSON acceptance, named
+trees and token coordinates are unchanged; malformed input remains invalid.
+
+Use `lang.compile(gramide_json.recovery_definition())` with the normal
+`lang.read_lang` API. Preserve strict validity from `Reading.error`: a recovered
+tree with zero ERROR nodes can still represent invalid JSON. No recovered-symbol
+capability or Prepared certification is added.
+
+Two trailing-comma recovery heads require the actual consumed closer to be
+mutually paired with the head's original opener. A closer belonging to an inner
+container cannot close an outer head: the direct outer head on `[[1,]` is
+refused and its output is rolled back. This proves outer delimiter ownership;
+recovering interiors can still contain genuine ERROR children.
+
+The raw `recovery_grammar.rules()` value needs
+`parser.compile_with_paired_heads` with both `"trailing_array_head"` and
+`"trailing_object_head"` annotations. Plain `parser.compile` on that blueprint
+omits the ownership guard and is not interchangeable with `recovery_definition()`.
+Runtime/table parity means annotated compilation against the v2 table. Old cores
+reject generated v2 source at the missing `from_tables_v2` loader; there is no
+automatic downgrade. Raw integer-table transports need an external format-2
+capability envelope.
+
+### Incremental identity and fallback
+
+The opt-in grammar adds a root RecoverAll Item and nonempty recovery heads.
+Item layout, recovery sites and fresh-constructor numbering can therefore differ
+from `definition()`. Keep one Definition throughout an incremental history;
+IDs from independently constructed default and opt-in documents are not a shared
+identity domain. Within the chosen Definition, the generic edit checks require
+unaffected node IDs to survive, changed ancestor nodes to receive fresh IDs, no retired
+ID reuse, valid counters, and exact fresh-reader materialization.
+
+A non-DONE `incremental.reparse_status` result requests a whole-file fallback and
+may append diagnostics to `Document.trace`. The caller may consume those
+messages. That raw call does not establish full-Document transactionality or a
+new Prepared guarantee. The bounded generic tests check that every other Document field, including
+nested Item traces, Compiled, source/provenance and counters, stays exact on
+fallback requests, and that the existing Document.trace prefix is preserved.
+
+### Known retention limits
+
+The bounded recovery matrix retains every required record in all 34 original
+cases and eight of 11 additional cases. These three additional cases still lose
+required complete records:
+
+- A pair with a container value before a missing comma: `{"a":{"x":1} "b":2}`
+- A missing colon before a container value: `{"a" [1,{"b":2}],"c":3}`
+- Three consecutive documents: `[1] {"k":2} true`
+
+The guard does not resolve these deficits or certify all retained containers as
+strict islands. Correctness validation makes no speed, allocation or memory claim.
+
+### Maintained checks
+
+The explicit `src/package_test.almd` root imports the original incremental and
+recovery tests plus `paired_recovery_test.almd`: all 23 package-owned tests are
+reachable, including the scanner/strict-grammar tests. Transitive core tests are
+also run; their count can change with the dependency. `ci/check.sh` checks that
+root, executes it, and byte-compares both default and v2 generated tables before
+running the existing CLI/fixture/Python oracle gates. The GitHub Quality workflow
+calls that script, so the new tests and generation parity run in maintained CI.
+
+The larger local integration also checks 301 strict inputs, 45 complete-region
+and diagnostic cases, 26 direct-token/head controls, and 332 generic edit states
+for both annotated runtime and generated-table readers. The same 332-state caller
+matches the frozen spanindex/trailing control in full output and diagnostic
+trace changes. Those external integration results do not replace the package CI.
