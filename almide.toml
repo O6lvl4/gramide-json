@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2026"
 
 [dependencies]
-gramide = { git = "https://github.com/O6lvl4/gramide", branch = "feat/paired-recovery-heads" }
+gramide = { git = "https://github.com/O6lvl4/gramide", branch = "feat/paired-recovery-heads", version = "0.2.11" }
