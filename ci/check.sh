@@ -5,7 +5,8 @@ compiler="${ALMIDE_BIN:-${ALMIDE:-almide}}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 "$compiler" check --deny-warnings cli/main.almd
-"$compiler" test src/grammar.almd
+"$compiler" check --deny-warnings src/package_test.almd
+"$compiler" test src/package_test.almd
 "$compiler" build cli/main.almd --release -o "$work/reader"
 "$work/reader" gen-table > "$work/table.almd"
 diff -u src/table.almd "$work/table.almd"

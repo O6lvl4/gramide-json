@@ -1,0 +1,3 @@
+// One explicit serial test root: preserve all original tests and add regressions.
+import self.incremental_test as _incremental_test
+import self.recovery_test as _recovery_test

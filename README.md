@@ -30,3 +30,36 @@ composes it as a git dependency; no grammar source is vendored into the CLI.
 `bash ci/check.sh` runs the complete package gate with an explicit test entry
 point, avoiding recursive parallel compiler fan-out. CI pins Almide and Rust
 in `.github/workflows/quality.yml`.
+
+## Incremental boundaries
+
+Object members and array values are incremental items. Edits inside a key or
+string can reuse the surrounding tree without re-lexing the entire document.
+`src/incremental_test.almd` checks local item reuse, committed-table parity,
+exact fresh-tree equality, source positions and node-ID retention. Strict JSON
+acceptance is unchanged: missing values, extra documents and trailing commas
+remain errors. Damaged-document recovery is still a separate, limited reader
+behavior, and no recovered-symbol capability is advertised.
+
+The incremental item boundaries use the parent-window and identity safeguards
+merged in [gramide #87](https://github.com/O6lvl4/gramide/pull/87). This package
+pins core main at commit `79ab321eb152039388ae592064625567ab6d2226` in `almide.lock`.
+The released v0.2.11 tag does not include those later fixes; the exact Git pin
+makes the dependency reproducible until a new core release is selected.
+
+## Missing-closer recovery
+
+Container members use bounded recovery and a comma, their own closing delimiter,
+or actual EOF as their non-consuming boundary. This preserves complete members
+when an outer closer is missing; the strict grammar still requires each closer.
+The ordinary `lang.read_lang` API reports invalidity and unpaired token indices
+even when the recovered tree has no `ERROR` nodes. A recovered tree is not proof
+that JSON is valid or that every malformed input retains useful structure.
+
+`src/recovery_test.almd` covers missing array/object closers, complete empty
+containers, nested missing closers, UTF-8 byte coordinates, CRLF, strict rejection,
+diagnostics and gaps, and ordinary-reader/direct-recovery parity. The complete
+serial package test root is `src/package_test.almd`; run `bash ci/check.sh` for
+those tests plus the existing CLI, generated-table and Python oracle gates.
+No additional core API or dependency pin is required. Root-prefix recovery
+remains unsupported.
