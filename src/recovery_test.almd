@@ -14,7 +14,7 @@ fn point(source: Bytes, offset: Int) -> (Int, Int) = {
   var base = 0
   var at = 0
   while at < offset {
-    if bytes.get_or(source, at, -1) == 10 then { line = line + 1; base = at + 1 } else ()
+    if bytes.get(source, at) ?? -1 == 10 then { line = line + 1; base = at + 1 } else ()
     at = at + 1
   }
   (line, offset - base + 1)

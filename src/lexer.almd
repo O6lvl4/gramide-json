@@ -2,7 +2,7 @@
 import gramide.lex
 import gramide.tree
 
-fn at(src: Bytes, i: Int) -> Int = bytes.get_or(src, i, -1)
+fn at(src: Bytes, i: Int) -> Int = bytes.get(src, i) ?? -1
 fn digit(b: Int) -> Bool = b >= 48 and b <= 57
 fn hex(b: Int) -> Bool = digit(b) or (b >= 65 and b <= 70) or (b >= 97 and b <= 102)
 fn token(kind: Int, s: Int, e: Int, line: Int, base: Int) -> tree.Token = tree.Token { kind: kind, start: s, end: e, line: line, col: s - base + 1 }

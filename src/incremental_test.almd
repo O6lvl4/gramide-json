@@ -43,7 +43,7 @@ test "nested JSON key and string edits reuse local items and match fresh trees" 
     assert(incremental.same(got, whole), incremental.first_difference(got, whole))
     assert_eq(incremental.node_id_breaks(before, ids, got, incremental.node_ids(doc), add), "")
     let remove = incremental.Edit { start: at, old_end: at + 1, new_end: at }
-    source = incremental.apply(source, remove, bytes.new(0))
+    source = incremental.apply(source, remove, bytes.zeros(0))
     assert_eq(incremental.reparse_status(doc, source, remove, (s, r) => lexer.scan(s, r), c), incremental.DONE)
     assert(incremental.same(incremental.materialize(doc), strict_json(c, source)!))
   }
