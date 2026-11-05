@@ -6,7 +6,8 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 "$compiler" check --deny-warnings cli/main.almd
 "$compiler" check --deny-warnings src/package_test.almd
-"$compiler" test src/package_test.almd
+# `almide test FILE` runs FILE's own test blocks; package_test only imports them.
+for t in src/incremental_test.almd src/recovery_test.almd; do "$compiler" test "$t"; done
 "$compiler" build cli/main.almd --release -o "$work/reader"
 "$work/reader" gen-table > "$work/table.almd"
 diff -u src/table.almd "$work/table.almd"
