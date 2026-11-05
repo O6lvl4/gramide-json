@@ -2,7 +2,7 @@ import gramide.package_api
 import self.lexer
 import self.symbols
 import self.table
-let VERSION = "0.1.0"
+let VERSION = "0.1.1"
 fn definition() -> package_api.Definition = package_api.Definition {
   id: "json", package_name: "gramide-json", version: VERSION, extensions: [".json"],
   capabilities: ["check", "tokens", "parse", "outline", "symbols", "tags", "map"],
